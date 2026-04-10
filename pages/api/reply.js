@@ -20,28 +20,29 @@ export default async function handler(req, res) {
   }
 
   const toneGuide = {
-    friendly: 'Warm, conversational, and approachable. Like a helpful friend running a business. Natural Nigerian warmth without being overly formal.',
-    premium: 'Polished, confident, and professional. Elevated language. The kind of brand that commands respect and premium pricing.',
-    persuasive: 'Direct, energetic, and conversion-focused. Create desire, build urgency, close the sale. Still human, never pushy.',
+    friendly: 'Warm, conversational, approachable. Natural Nigerian warmth. Not overly formal.',
+    premium: 'Polished, confident, professional. Commands respect and premium pricing.',
+    persuasive: 'Direct, energetic, conversion-focused. Creates desire, builds urgency. Human, never annoying.',
   }
 
   const historyText = previousMessages && previousMessages.length > 0
-    ? `\n\nConversation history:\n${previousMessages.map(m => `${m.role === 'customer' ? 'Customer' : 'Business'}: ${m.text}`).join('\n')}`
+    ? `\n\nConversation so far:\n${previousMessages.map(m => `${m.role === 'customer' ? 'Customer' : 'Business'}: ${m.text}`).join('\n')}`
     : ''
 
   const systemPrompt = `You are SellDesk, an elite WhatsApp sales assistant for Nigerian businesses. Help business owners craft replies that convert customers into buyers.
 
-You understand the Nigerian market:
-- Customers often negotiate on price
-- Trust and social proof matter enormously  
-- Responses must feel human, not robotic
-- WhatsApp messages should be concise with natural line breaks
+Nigerian market rules:
+- Customers negotiate on price — handle this gracefully
+- Trust and social proof close sales
+- Responses must feel human, never robotic
+- WhatsApp messages use natural line breaks, stay concise
 - Never use dash bullet points
+- Urgency works when it feels genuine
 
 Industry: ${industryContext[industry] || industryContext.general}
 Tone: ${toneGuide[tone] || toneGuide.friendly}
 
-Return ONLY valid JSON. No markdown. No backticks.`
+Return ONLY valid JSON. No markdown. No backticks. No explanation.`
 
   const userPrompt = `Business: ${businessName || 'Our Business'}
 Product Info: ${productInfo}
@@ -50,43 +51,52 @@ ${availability ? `Availability: ${availability}` : ''}${historyText}
 
 Customer message: "${customerMessage}"
 
-Return this exact JSON:
+Return this exact JSON structure:
 {
   "reply": "The WhatsApp reply to send. Natural line breaks. Sound human. Be concise.",
   "intent": "inquiry | price_objection | ready_to_buy | complaint | negotiating | just_browsing",
-  "intent_label": "Human readable intent e.g. Customer is negotiating price",
+  "intent_label": "Human readable e.g. Customer is negotiating price",
   "conversion_probability": 0.0,
   "conversion_label": "LOW | MEDIUM | HIGH",
   "strategy_used": "One sentence on the sales strategy applied",
   "follow_up_tip": "One specific tip for what to do after sending this reply",
-  "alternative_reply": "A shorter or differently toned alternative"
+  "alternative_reply": "A shorter or differently toned alternative reply"
 }`
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5',
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.7,
         max_tokens: 1500,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
       }),
     })
 
     const data = await response.json()
-    if (!response.ok) return res.status(500).json({ error: 'AI service error. Please try again.' })
 
-    const raw = data.content.map(b => b.text || '').join('')
+    if (!response.ok) {
+      console.error('Groq error:', data)
+      return res.status(500).json({ error: 'AI service error. Please try again.' })
+    }
+
+    const raw = data.choices?.[0]?.message?.content || ''
     const cleaned = raw.replace(/```json|```/g, '').trim()
 
     let parsed
-    try { parsed = JSON.parse(cleaned) }
-    catch { return res.status(500).json({ error: 'Could not parse AI response. Please try again.' }) }
+    try {
+      parsed = JSON.parse(cleaned)
+    } catch {
+      return res.status(500).json({ error: 'Could not parse AI response. Please try again.' })
+    }
 
     return res.status(200).json(parsed)
   } catch (err) {
